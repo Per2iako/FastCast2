@@ -18,3 +18,8 @@
 ### [High-Fidelity Behavior](https://weenachuangkud.github.io/FastCast2/docs/api-reference/#5-high-fidelity-behavior)
 - Modes (Default, Automatic, Always)
 - HighFidelitySegmentSize
+
+### NOTE
+
+- You do not need to check whether the arguments are correct, handle edge cases, etc., as these are already handled (and should be handled) inside the code.
+- If you pass all the tests without any errors, and the results aren't off, it should pretty much be working fine.

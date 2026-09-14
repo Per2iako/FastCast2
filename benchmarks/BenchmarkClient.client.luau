@@ -61,6 +61,7 @@ local Config = {
 --// Constants
 local NUM_WORKERS_CHANGE_COOLDOWN = 1.5
 local MODE_CHANGE_COOLDOWN = 2.5
+local BENCHMARK_COOLDOWN = 2.5
 
 --// Modules
 
@@ -410,7 +411,7 @@ local function benchmark()
 	cleanupCasts()
 
 	-- Give FastCast/object cache time to settle.
-	task.wait(2.5)
+	task.wait(BENCHMARK_COOLDOWN)
 
 	printSeparator("DONE")
 	printFPS()

@@ -58,6 +58,10 @@ local Config = {
 	MinSegmentSize = 0.05,
 }
 
+--// Constants
+local NUM_WORKERS_CHANGE_COOLDOWN = 2.5
+local BENCHMARK_COOLDOWN = 2.5
+
 --// Modules
 
 local FastCastModule = ReplicatedStorage:WaitForChild("FastCast2")
@@ -288,39 +292,39 @@ local function printBenchmarkInfo()
 
 	print(("ProjectileAmount: %d"):format(
 		Config.ProjectileAmount
-	))
+		))
 
 	print(("Velocity: %.2f"):format(
 		Config.Velocity
-	))
+		))
 
 	print(("ObjectCache: %s"):format(
 		getObjectCacheState() and "Enabled" or "Disabled"
-	))
+		))
 
 	print(("VisualizeCasts: %s"):format(
 		CastBehavior.VisualizeCasts and "Enabled" or "Disabled"
-	))
+		))
 
 	print(("HighFidelityBehavior: %s"):format(
 		getHighFidelityName()
-	))
+		))
 
 	print(("HighFidelitySegmentSize: %.2f"):format(
 		CastBehavior.HighFidelitySegmentSize
-	))
+		))
 
 	print(("MovementMode: %s"):format(
 		Config.MovementMode
-	))
+		))
 
 	print(("Mode: %s"):format(
 		getModeName()
-	))
+		))
 
 	print(("numWorkers: %d"):format(
 		Config.NumWorkers
-	))
+		))
 end
 
 --// FPS Output
@@ -388,7 +392,7 @@ local function runBenchmark()
 
 	print(("Firing %d projectiles..."):format(
 		Config.ProjectileAmount
-	))
+		))
 
 	fireProjectiles()
 
@@ -407,7 +411,7 @@ local function runBenchmark()
 
 	terminateActiveCasts()
 
-	task.wait(2.5)
+	task.wait(BENCHMARK_COOLDOWN)
 
 	printSection("DONE")
 	printFPS()
@@ -429,7 +433,7 @@ local function toggleInstancing()
 
 	print(("Instanced: %s"):format(
 		Config.Instanced and "Enabled" or "Disabled"
-	))
+		))
 end
 
 local function toggleMovementMode()
@@ -448,7 +452,7 @@ local function toggleMovementMode()
 
 	print(("MovementMode: %s"):format(
 		Config.MovementMode
-	))
+		))
 end
 
 local function toggleObjectCache()
@@ -461,7 +465,7 @@ local function toggleObjectCache()
 		Config.ObjectCacheEnabled
 			and "Enabled"
 			or "Disabled"
-	))
+		))
 end
 
 local function toggleVisualization()
@@ -475,7 +479,7 @@ local function toggleVisualization()
 		Config.VisualizeCasts
 			and "Enabled"
 			or "Disabled"
-	))
+		))
 end
 
 local function cycleHighFidelity()
@@ -500,7 +504,7 @@ local function cycleHighFidelity()
 
 	print(("HighFidelityBehavior: %s"):format(
 		getHighFidelityName()
-	))
+		))
 end
 
 local function changeSegmentSize(amount)
@@ -511,7 +515,7 @@ local function changeSegmentSize(amount)
 
 	print(("HighFidelitySegmentSize: %.2f"):format(
 		CastBehavior.HighFidelitySegmentSize
-	))
+		))
 end
 
 local function changeProjectileAmount(amount)
@@ -522,7 +526,7 @@ local function changeProjectileAmount(amount)
 
 	print(("ProjectileAmount: %d"):format(
 		Config.ProjectileAmount
-	))
+		))
 end
 
 --// Worker Configuration
@@ -549,9 +553,9 @@ local function changeWorkerCount(amount)
 
 	print(("numWorkers: %d"):format(
 		Config.NumWorkers
-	))
+		))
 
-	task.wait(0.05)
+	task.wait(NUM_WORKERS_CHANGE_COOLDOWN)
 
 	IsReconfiguring = false
 end

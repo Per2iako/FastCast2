@@ -58,6 +58,11 @@ local Config = {
 	ProjectileStep = 500,
 }
 
+--// Constants
+local NUM_WORKERS_CHANGE_COOLDOWN = 1.5
+local MODE_CHANGE_COOLDOWN = 2.5
+local BENCHMARK_COOLDOWN = 2.5
+
 --// Modules
 
 local FastCastModule = ReplicatedStorage:WaitForChild("FastCast2")
@@ -406,7 +411,7 @@ local function benchmark()
 	cleanupCasts()
 
 	-- Give FastCast/object cache time to settle.
-	task.wait(2.5)
+	task.wait(BENCHMARK_COOLDOWN)
 
 	printSeparator("DONE")
 	printFPS()
@@ -533,7 +538,7 @@ local function switchMode()
 
 	print(("Switched to %s."):format(getMode()))
 
-	task.wait(2.5)
+	task.wait(MODE_CHANGE_COOLDOWN)
 
 	IsReconfiguring = false
 
@@ -567,7 +572,7 @@ local function changeWorkerCount(amount)
 
 	print(("numWorkers: %d"):format(Config.NumWorkers))
 
-	task.wait(0.05)
+	task.wait(NUM_WORKERS_CHANGE_COOLDOWN)
 
 	IsReconfiguring = false
 end

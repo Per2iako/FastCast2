@@ -1,475 +1,699 @@
 --[[
-	- Author Mawin CK
-	- Date: 2026
-]]
+	FastCast2 Server Benchmark
+	Author: Mawin CK
+	Date: 2026
 
---[[
 	Interactive server benchmark.
-	Type single letters in chat to control the benchmark (e.g. "p" to start).
-	Type "h" for the full list of commands.
+	Type single letters in chat to control the benchmark.
+
+	Commands:
+		p  - Start benchmark
+		l  - +500 projectiles
+		k  - -500 projectiles
+		u  - Toggle Instanced / Instanceless
+		j  - Toggle BulkMoveTo / Motor6D
+		y  - Toggle ObjectCache
+		v  - Toggle Cast Visualization
+		x  - Cycle HighFidelityBehavior
+		>  - Increase HighFidelitySegmentSize
+		<  - Decrease HighFidelitySegmentSize
+		]  - Increase workers
+		[  - Decrease workers
+		i  - Show benchmark information
+		h  - Show help
 ]]
 
--- Services
-local RS = game:GetService("RunService")
-local Rep = game:GetService("ReplicatedStorage")
-local SSS = game:GetService("ServerScriptService")
+--// Services
+
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 local Players = game:GetService("Players")
 
--- Settings (mutable via interactive controls)
-local numWorkers = 4
-local Instanced = false
-local MovementMode = "BulkMoveTo"
-local UseObjectCache = false
-local ProjectileAmount = 500
-local VisualizeCasts = false
-local VMName = "CastVMs"
-local VMContainerName = "CastVMContainer"
-local VMTemplateName = "CastVM"
+--// Configuration
 
-local VELOCITY = 6
+local Config = {
+	NumWorkers = 4,
 
--- Requires
-local FastCast = require(Rep:WaitForChild("FastCast2"))
-local FastCastEnums = require(Rep:WaitForChild("FastCast2"):WaitForChild("FastCastEnums"))
+	Instanced = false,
+	MovementMode = "BulkMoveTo",
+	ObjectCacheEnabled = false,
+	ProjectileAmount = 500,
+	VisualizeCasts = false,
 
--- Variables
+	Velocity = 6,
+
+	BenchmarkDuration = 6,
+
+	VMName = "CastVMs",
+	VMContainerName = "CastVMContainer",
+	VMTemplateName = "CastVM",
+
+	ProjectileStep = 500,
+
+	WorkerStep = 1,
+	MinWorkers = 2,
+
+	SegmentSizeStep = 0.05,
+	MinSegmentSize = 0.05,
+}
+
+--// Modules
+
+local FastCastModule = ReplicatedStorage:WaitForChild("FastCast2")
+
+local FastCast = require(FastCastModule)
+local FastCastEnums = require(
+	FastCastModule:WaitForChild("FastCastEnums")
+)
+
+--// Projectile Objects
+
 local ProjectileContainer = Instance.new("Folder")
 ProjectileContainer.Name = "FastCast2PJ_Parallel"
 ProjectileContainer.Parent = workspace
+
 local ProjectileTemplate = Instance.new("Part")
 ProjectileTemplate.Name = "Projectile"
-ProjectileTemplate.Parent = Rep
-ProjectileTemplate.Size = Vector3.new(1,1,1)
-ProjectileTemplate.CanCollide = false
+ProjectileTemplate.Size = Vector3.one
+ProjectileTemplate.Position = Vector3.one
+
 ProjectileTemplate.Anchored = true
+ProjectileTemplate.CanCollide = false
 ProjectileTemplate.CanQuery = false
 ProjectileTemplate.CanTouch = false
-ProjectileTemplate.Position = Vector3.new(1,1,1)
 ProjectileTemplate.Massless = true
 
--- FPS tracking
-local startTime = tick()
-local updateRate = 0.5
-local fpsTable = {}
-local averageFps = 0
-local maxFps = 0
-local minFps = math.huge
-local currentFps = 0
+ProjectileTemplate.Parent = ReplicatedStorage
 
-RS.Heartbeat:Connect(function(dt: number)
-	local fps = 1/dt
-	currentFps = fps
-	if fps > maxFps then
-		maxFps = fps
-	end
-	if fps < minFps then
-		minFps = fps
-	end
-	table.insert(fpsTable, fps)
+--// Raycast Parameters
 
-	if tick() >= startTime + updateRate then
-		local totalFps = 0
-		for _, vFps in fpsTable do
-			totalFps += vFps
-		end
-		averageFps = totalFps / #fpsTable
-		fpsTable = {}
-		startTime = tick()
-	end
-end)
-
--- CastParams
 local CastParams = RaycastParams.new()
 CastParams.FilterType = Enum.RaycastFilterType.Exclude
 CastParams.IgnoreWater = true
 
--- Behavior
-local castBehavior = FastCast.newBehavior()
-castBehavior.MaxDistance = 999999999
-castBehavior.RaycastParams = CastParams
-castBehavior.HighFidelityBehavior = FastCastEnums.HighFidelityBehavior.Default
-castBehavior.HighFidelitySegmentSize = 1
-castBehavior.Acceleration = Vector3.new(0, 0, 0)
-castBehavior.AutoIgnoreContainer = true
-castBehavior.CosmeticBulletContainer = ProjectileContainer
-castBehavior.CosmeticBulletTemplate = Instanced and ProjectileTemplate or nil
-castBehavior.VisualizeCasts = VisualizeCasts
+--// Cast Behavior
 
--- Caster
-local Caster = nil
-local activeCasts = {}
+local CastBehavior = FastCast.newBehavior()
 
-local function setupCaster()
-	if Caster then
-		Caster:Destroy()
-	end
+CastBehavior.MaxDistance = 1e9
+CastBehavior.RaycastParams = CastParams
 
-	Caster = FastCast.newParallel()
-	Caster:Init(
-		numWorkers,
-		SSS,
-		VMName,
-		SSS,
-		VMContainerName,
-		VMTemplateName,
-		MovementMode
-	)
+CastBehavior.HighFidelityBehavior =
+	FastCastEnums.HighFidelityBehavior.Default
 
-	Caster.CastFire = function(cast)
-		table.insert(activeCasts, cast)
-	end
+CastBehavior.HighFidelitySegmentSize = 1
+CastBehavior.Acceleration = Vector3.zero
 
-	if UseObjectCache then
-		Caster:SetObjectCacheEnabled(
-			true,
-			ProjectileTemplate,
-			ProjectileAmount,
-			ProjectileContainer
-		)
-	end
+CastBehavior.AutoIgnoreContainer = true
 
-	activeCasts = {}
-end
+CastBehavior.CosmeticBulletContainer = ProjectileContainer
+CastBehavior.CosmeticBulletTemplate =
+	Config.Instanced and ProjectileTemplate or nil
 
--- Functions
-local function summary()
-	print(string.format("Delta: %.2f ms", 1000 / currentFps))
-	print(string.format("Average FPS: %.2f", averageFps))
-	print(string.format("Max FPS: %.2f", maxFps))
-	print(string.format("Min FPS: %.2f", minFps))
-end
+CastBehavior.VisualizeCasts = Config.VisualizeCasts
 
-local function printBenchmarkInfo()
-	print("=== PARALLEL MODE BENCHMARK ===")
+--// State
 
-	if Instanced and UseObjectCache then
-		print("ObjectCache Enabled")
-	else
-		print("ObjectCache Disabled")
-	end
-
-	if VisualizeCasts then
-		print("VisualizeCasts: Enabled")
-	else
-		print("VisualizeCasts: Disabled")
-	end
-
-	local current = castBehavior.HighFidelityBehavior
-	if current == FastCastEnums.HighFidelityBehavior.Default then
-		print("HighFidelityBehavior: Default")
-	elseif current == FastCastEnums.HighFidelityBehavior.Automatic then
-		print("HighFidelityBehavior: Automatic")
-	else
-		print("HighFidelityBehavior: Always")
-	end
-
-	print(string.format("HighFidelitySegmentSize: %.2f", castBehavior.HighFidelitySegmentSize))
-
-	if Caster.MovementMode == "BulkMoveTo" then
-		print("MovementMode: BulkMoveTo")
-	else
-		print("MovementMode: Motor6D")
-	end
-
-	local mode = Instanced and "Instanced" or "Instanceless"
-	print(mode)
-
-	print("numWorkers: ", numWorkers)
-end
+local Caster
+local ActiveCasts = {}
 
 local IsBenchmarking = false
-local BENCH_TIME = 6
+local IsReconfiguring = false
+
+--// FPS Tracking
+
+local FPS = {
+	Current = 0,
+	Average = 0,
+	Minimum = math.huge,
+	Maximum = 0,
+
+	Accumulator = 0,
+	FrameCount = 0,
+}
+
+local function resetFPS()
+	FPS.Current = 0
+	FPS.Average = 0
+	FPS.Minimum = math.huge
+	FPS.Maximum = 0
+
+	FPS.Accumulator = 0
+	FPS.FrameCount = 0
+end
+
+local function updateFPS(dt)
+	if dt <= 0 then
+		return
+	end
+
+	local current = 1 / dt
+
+	FPS.Current = current
+	FPS.Minimum = math.min(FPS.Minimum, current)
+	FPS.Maximum = math.max(FPS.Maximum, current)
+
+	FPS.Accumulator += current
+	FPS.FrameCount += 1
+
+	-- Keep a continuously updated average.
+	FPS.Average = FPS.Accumulator / FPS.FrameCount
+end
+
+RunService.Heartbeat:Connect(function(dt)
+	updateFPS(dt)
+end)
+
+--// Utility
+
+local function getHighFidelityName()
+	local behavior = CastBehavior.HighFidelityBehavior
+
+	if behavior == FastCastEnums.HighFidelityBehavior.Default then
+		return "Default"
+	elseif behavior == FastCastEnums.HighFidelityBehavior.Automatic then
+		return "Automatic"
+	else
+		return "Always"
+	end
+end
+
+local function getObjectCacheState()
+	if not Caster then
+		return false
+	end
+
+	if Caster.ObjectCacheEnabled then
+		return true
+	end
+
+	if Caster.BaseCast and Caster.BaseCast.ObjectCacheInstance then
+		return true
+	end
+
+	return false
+end
+
+local function getModeName()
+	return Config.Instanced and "Instanced" or "Instanceless"
+end
+
+local function printSection(title)
+	print(("=== %s ==="):format(title))
+end
+
+--// Cast Tracking
+
+local function onCastFire(cast)
+	ActiveCasts[#ActiveCasts + 1] = cast
+end
+
+--// Caster Creation
+
+local function createCaster()
+	local caster = FastCast.newParallel()
+
+	caster:Init(
+		Config.NumWorkers,
+		ServerScriptService,
+		Config.VMName,
+		ServerScriptService,
+		Config.VMContainerName,
+		Config.VMTemplateName,
+		Config.MovementMode
+	)
+
+	caster.CastFire = onCastFire
+
+	return caster
+end
+
+local function applyObjectCache()
+	if not Caster then
+		return
+	end
+
+	if not Config.ObjectCacheEnabled then
+		Caster:SetObjectCacheEnabled(false)
+		return
+	end
+
+	Caster:SetObjectCacheEnabled(
+		true,
+		ProjectileTemplate,
+		Config.ProjectileAmount,
+		ProjectileContainer
+	)
+end
+
+--// Cast Cleanup
+
+local function terminateActiveCasts()
+	for i = #ActiveCasts, 1, -1 do
+		local cast = ActiveCasts[i]
+
+		if cast then
+			FastCast:TerminateCast(cast)
+		end
+
+		ActiveCasts[i] = nil
+	end
+end
+
+local function destroyCaster()
+	if not Caster then
+		return
+	end
+
+	terminateActiveCasts()
+
+	Caster:Destroy()
+	Caster = nil
+
+	table.clear(ActiveCasts)
+end
+
+local function rebuildCaster()
+	destroyCaster()
+
+	Caster = createCaster()
+	applyObjectCache()
+end
+
+--// Benchmark Information
+
+local function printBenchmarkInfo()
+	printSection("PARALLEL MODE BENCHMARK")
+
+	print(("ProjectileAmount: %d"):format(
+		Config.ProjectileAmount
+	))
+
+	print(("Velocity: %.2f"):format(
+		Config.Velocity
+	))
+
+	print(("ObjectCache: %s"):format(
+		getObjectCacheState() and "Enabled" or "Disabled"
+	))
+
+	print(("VisualizeCasts: %s"):format(
+		CastBehavior.VisualizeCasts and "Enabled" or "Disabled"
+	))
+
+	print(("HighFidelityBehavior: %s"):format(
+		getHighFidelityName()
+	))
+
+	print(("HighFidelitySegmentSize: %.2f"):format(
+		CastBehavior.HighFidelitySegmentSize
+	))
+
+	print(("MovementMode: %s"):format(
+		Config.MovementMode
+	))
+
+	print(("Mode: %s"):format(
+		getModeName()
+	))
+
+	print(("numWorkers: %d"):format(
+		Config.NumWorkers
+	))
+end
+
+--// FPS Output
+
+local function printFPS()
+	local minimum = FPS.Minimum
+
+	if minimum == math.huge then
+		minimum = 0
+	end
+
+	local delta = FPS.Current > 0
+		and (1000 / FPS.Current)
+		or 0
+
+	print(("Delta: %.2f ms"):format(delta))
+	print(("Average FPS: %.2f"):format(FPS.Average))
+	print(("Max FPS: %.2f"):format(FPS.Maximum))
+	print(("Min FPS: %.2f"):format(minimum))
+end
+
+--// Projectile Generation
+
+local function randomDirection()
+	return Vector3.new(
+		math.random() * 2 - 1,
+		math.random() * 2 - 1,
+		math.random() * 2 - 1
+	).Unit
+end
+
+local function fireProjectile()
+	local origin = Vector3.new(
+		math.random(-100, 100),
+		math.random(0, 100),
+		math.random(-100, 100)
+	)
+
+	Caster:RaycastFire(
+		origin,
+		randomDirection(),
+		Config.Velocity,
+		CastBehavior
+	)
+end
+
+local function fireProjectiles()
+	for _ = 1, Config.ProjectileAmount do
+		fireProjectile()
+	end
+end
+
+--// Benchmark
 
 local function runBenchmark()
-	if IsBenchmarking then
+	if IsBenchmarking or IsReconfiguring then
 		return
 	end
 
 	IsBenchmarking = true
 
-	maxFps = 0
-	minFps = math.huge
+	resetFPS()
 
-	print("=== PARALLEL MODE BENCHMARK ===")
+	printBenchmarkInfo()
 
-	if Instanced and UseObjectCache then
-		print("ObjectCache Enabled")
-	else
-		print("ObjectCache Disabled")
-	end
+	print(("Firing %d projectiles..."):format(
+		Config.ProjectileAmount
+	))
 
-	if VisualizeCasts then
-		print("VisualizeCasts: Enabled")
-	else
-		print("VisualizeCasts: Disabled")
-	end
+	fireProjectiles()
 
-	local current = castBehavior.HighFidelityBehavior
-	if current == FastCastEnums.HighFidelityBehavior.Default then
-		print("HighFidelityBehavior: Default")
-	elseif current == FastCastEnums.HighFidelityBehavior.Automatic then
-		print("HighFidelityBehavior: Automatic")
-	else
-		print("HighFidelityBehavior: Always")
-	end
-
-	print(string.format("HighFidelitySegmentSize: %.2f", castBehavior.HighFidelitySegmentSize))
-
-	if Caster.MovementMode == "BulkMoveTo" then
-		print("MovementMode: BulkMoveTo")
-	else
-		print("MovementMode: Motor6D")
-	end
-
-	local mode = Instanced and "Instanced" or "Instanceless"
-	print(mode)
-
-	print("numWorkers: ", numWorkers)
-
-	print(string.format("Firing %d projectiles...", ProjectileAmount))
-
-	for _ = 1, ProjectileAmount do
-		Caster:RaycastFire(
-			Vector3.new(
-				math.random(-100, 100),
-				math.random(0, 100),
-				math.random(-100, 100)
-			),
-			Vector3.new(
-				math.random() * 2 - 1,
-				math.random() * 2 - 1,
-				math.random() * 2 - 1
-			),
-			VELOCITY,
-			castBehavior
-		)
-	end
-
+	-- Let the first batch begin processing.
 	task.wait()
 
-	print("=== CREATION COMPLETE ===")
-	summary()
+	printSection("CREATION COMPLETE")
+	printFPS()
 
-	task.wait(BENCH_TIME)
+	task.wait(Config.BenchmarkDuration)
 
-	print("=== SIMULATION COMPLETE ===")
-	summary()
+	printSection("SIMULATION COMPLETE")
+	printFPS()
 
-	print("=== CLEANUP ===")
-	for i = #activeCasts, 1, -1 do
-		FastCast:TerminateCast(activeCasts[i])
-	end
-	activeCasts = {}
+	printSection("CLEANUP")
+
+	terminateActiveCasts()
 
 	task.wait(2.5)
 
-	print("=== DONE ===")
-	summary()
+	printSection("DONE")
+	printFPS()
 
 	IsBenchmarking = false
 end
 
--- Interactive controls via Chat
-local IsReconfiguring = false
+--// Configuration
 
-local function onChatMessage(_, message)
-	local msg = message:lower()
+local function setInstanced(enabled)
+	Config.Instanced = enabled
 
-	if msg == "p" then
-		if IsReconfiguring then
-			return
+	CastBehavior.CosmeticBulletTemplate =
+		enabled and ProjectileTemplate or nil
+end
+
+local function toggleInstancing()
+	setInstanced(not Config.Instanced)
+
+	print(("Instanced: %s"):format(
+		Config.Instanced and "Enabled" or "Disabled"
+	))
+end
+
+local function toggleMovementMode()
+	if Config.MovementMode == "BulkMoveTo" then
+		Config.MovementMode = "Motor6D"
+	else
+		Config.MovementMode = "BulkMoveTo"
+	end
+
+	if Caster then
+		Caster:SetMovementModeEnabled(
+			true,
+			Config.MovementMode
+		)
+	end
+
+	print(("MovementMode: %s"):format(
+		Config.MovementMode
+	))
+end
+
+local function toggleObjectCache()
+	Config.ObjectCacheEnabled =
+		not Config.ObjectCacheEnabled
+
+	applyObjectCache()
+
+	print(("ObjectCache: %s"):format(
+		Config.ObjectCacheEnabled
+			and "Enabled"
+			or "Disabled"
+	))
+end
+
+local function toggleVisualization()
+	Config.VisualizeCasts =
+		not Config.VisualizeCasts
+
+	CastBehavior.VisualizeCasts =
+		Config.VisualizeCasts
+
+	print(("VisualizeCasts: %s"):format(
+		Config.VisualizeCasts
+			and "Enabled"
+			or "Disabled"
+	))
+end
+
+local function cycleHighFidelity()
+	local current = CastBehavior.HighFidelityBehavior
+
+	if current == FastCastEnums.HighFidelityBehavior.Default then
+
+		CastBehavior.HighFidelityBehavior =
+			FastCastEnums.HighFidelityBehavior.Automatic
+
+	elseif current == FastCastEnums.HighFidelityBehavior.Automatic then
+
+		CastBehavior.HighFidelityBehavior =
+			FastCastEnums.HighFidelityBehavior.Always
+
+	else
+
+		CastBehavior.HighFidelityBehavior =
+			FastCastEnums.HighFidelityBehavior.Default
+
+	end
+
+	print(("HighFidelityBehavior: %s"):format(
+		getHighFidelityName()
+	))
+end
+
+local function changeSegmentSize(amount)
+	CastBehavior.HighFidelitySegmentSize = math.max(
+		Config.MinSegmentSize,
+		CastBehavior.HighFidelitySegmentSize + amount
+	)
+
+	print(("HighFidelitySegmentSize: %.2f"):format(
+		CastBehavior.HighFidelitySegmentSize
+	))
+end
+
+local function changeProjectileAmount(amount)
+	Config.ProjectileAmount = math.max(
+		0,
+		Config.ProjectileAmount + amount
+	)
+
+	print(("ProjectileAmount: %d"):format(
+		Config.ProjectileAmount
+	))
+end
+
+--// Worker Configuration
+
+local function changeWorkerCount(amount)
+	if IsBenchmarking or IsReconfiguring then
+		return
+	end
+
+	local newCount = math.max(
+		Config.MinWorkers,
+		Config.NumWorkers + amount
+	)
+
+	if newCount == Config.NumWorkers then
+		return
+	end
+
+	IsReconfiguring = true
+
+	Config.NumWorkers = newCount
+
+	rebuildCaster()
+
+	print(("numWorkers: %d"):format(
+		Config.NumWorkers
+	))
+
+	task.wait(0.05)
+
+	IsReconfiguring = false
+end
+
+--// Help
+
+local function showHelp()
+	printSection("FastCast2 Server Benchmark Keys")
+
+	print("Type these commands in chat:")
+
+	print("p - Start benchmark")
+	print("l - Increase projectile amount by 500")
+	print("k - Decrease projectile amount by 500")
+	print("u - Toggle Instanced / Instanceless")
+	print("j - Toggle BulkMoveTo / Motor6D")
+	print("y - Toggle ObjectCache")
+	print("v - Toggle VisualizeCasts")
+	print("x - Cycle HighFidelityBehavior")
+	print("> - Increase HighFidelitySegmentSize")
+	print("< - Decrease HighFidelitySegmentSize")
+	print("] - Increment numWorkers")
+	print("[ - Decrement numWorkers")
+	print("i - Show benchmark information")
+	print("h - Show this help")
+end
+
+--// Command Handlers
+
+local Commands = {
+	p = runBenchmark,
+
+	l = function()
+		if not IsBenchmarking then
+			changeProjectileAmount(Config.ProjectileStep)
 		end
-		runBenchmark()
+	end,
 
-	elseif msg == "l" then
-		if IsBenchmarking then
-			return
+	k = function()
+		if not IsBenchmarking then
+			changeProjectileAmount(-Config.ProjectileStep)
 		end
-		ProjectileAmount += 500
-		print(string.format("ProjectileAmount: %d", ProjectileAmount))
+	end,
 
-	elseif msg == "k" then
-		if IsBenchmarking then
-			return
+	u = function()
+		if not IsBenchmarking then
+			toggleInstancing()
 		end
-		ProjectileAmount = math.max(0, ProjectileAmount - 500)
-		print(string.format("ProjectileAmount: %d", ProjectileAmount))
+	end,
 
-	elseif msg == "u" then
-		if IsBenchmarking then
-			return
+	j = function()
+		if not IsBenchmarking and not IsReconfiguring then
+			toggleMovementMode()
 		end
-		Instanced = not Instanced
-		castBehavior.CosmeticBulletTemplate = Instanced and ProjectileTemplate or nil
-		print(string.format("CosmeticBulletTemplate: %s", tostring(Instanced)))
+	end,
 
-	elseif msg == "j" then
-		if IsReconfiguring then
-			return
+	y = function()
+		if not IsBenchmarking and not IsReconfiguring then
+			toggleObjectCache()
 		end
-		if IsBenchmarking then
-			return
+	end,
+
+	v = function()
+		if not IsBenchmarking then
+			toggleVisualization()
 		end
+	end,
 
-		if Caster.MovementMode == "BulkMoveTo" then
-			Caster:SetMovementModeEnabled(true, "Motor6D")
-			MovementMode = "Motor6D"
-			print("MovementMode: Motor6D")
-		else
-			Caster:SetMovementModeEnabled(true, "BulkMoveTo")
-			MovementMode = "BulkMoveTo"
-			print("MovementMode: BulkMoveTo")
+	x = function()
+		if not IsBenchmarking then
+			cycleHighFidelity()
 		end
+	end,
 
-	elseif msg == "y" then
-		if IsReconfiguring then
-			return
+	[">"] = function()
+		if not IsBenchmarking then
+			changeSegmentSize(Config.SegmentSizeStep)
 		end
-		if IsBenchmarking then
-			return
+	end,
+
+	["."] = function()
+		if not IsBenchmarking then
+			changeSegmentSize(Config.SegmentSizeStep)
 		end
+	end,
 
-		if UseObjectCache then
-			Caster:SetObjectCacheEnabled(false)
-			UseObjectCache = false
-			print("ObjectCache: Disabled")
-		else
-			Caster:SetObjectCacheEnabled(
-				true,
-				ProjectileTemplate,
-				ProjectileAmount,
-				ProjectileContainer
-			)
-			UseObjectCache = true
-			print("ObjectCache Enabled")
+	["<"] = function()
+		if not IsBenchmarking then
+			changeSegmentSize(-Config.SegmentSizeStep)
 		end
+	end,
 
-	elseif msg == "v" then
-		if IsBenchmarking then
-			return
+	[","] = function()
+		if not IsBenchmarking then
+			changeSegmentSize(-Config.SegmentSizeStep)
 		end
+	end,
 
-		VisualizeCasts = not VisualizeCasts
-		castBehavior.VisualizeCasts = VisualizeCasts
-		if VisualizeCasts then
-			print("VisualizeCasts: Enabled")
-		else
-			print("VisualizeCasts: Disabled")
+	["["] = function()
+		changeWorkerCount(-Config.WorkerStep)
+	end,
+
+	["]"] = function()
+		changeWorkerCount(Config.WorkerStep)
+	end,
+
+	i = function()
+		if not IsBenchmarking then
+			printBenchmarkInfo()
 		end
+	end,
 
-	elseif msg == "x" then
-		if IsBenchmarking then
-			return
-		end
+	h = showHelp,
+}
 
-		local current = castBehavior.HighFidelityBehavior
-		if current == FastCastEnums.HighFidelityBehavior.Default then
-			castBehavior.HighFidelityBehavior = FastCastEnums.HighFidelityBehavior.Automatic
-			print("HighFidelityBehavior: Automatic")
-		elseif current == FastCastEnums.HighFidelityBehavior.Automatic then
-			castBehavior.HighFidelityBehavior = FastCastEnums.HighFidelityBehavior.Always
-			print("HighFidelityBehavior: Always")
-		else
-			castBehavior.HighFidelityBehavior = FastCastEnums.HighFidelityBehavior.Default
-			print("HighFidelityBehavior: Default")
-		end
+--// Chat Handling
 
-	elseif msg == ">" or msg == "." then
-		if IsBenchmarking then
-			return
-		end
+local function onChatMessage(player, message)
+	local command = message:lower():gsub("^%s*(.-)%s*$", "%1")
 
-		castBehavior.HighFidelitySegmentSize += 0.05
-		print(string.format("HighFidelitySegmentSize: %.2f", castBehavior.HighFidelitySegmentSize))
+	local handler = Commands[command]
 
-	elseif msg == "<" or msg == "," then
-		if IsBenchmarking then
-			return
-		end
-
-		castBehavior.HighFidelitySegmentSize = math.max(0.05, castBehavior.HighFidelitySegmentSize - 0.05)
-		print(string.format("HighFidelitySegmentSize: %.2f", castBehavior.HighFidelitySegmentSize))
-
-	elseif msg == "]" then
-		if IsReconfiguring then
-			return
-		end
-		if IsBenchmarking then
-			return
-		end
-
-		IsReconfiguring = true
-		numWorkers += 1
-		setupCaster()
-		print("numWorkers: ", numWorkers)
-		task.wait(0.05)
-		IsReconfiguring = false
-
-	elseif msg == "[" then
-		if IsReconfiguring then
-			return
-		end
-		if IsBenchmarking then
-			return
-		end
-		if numWorkers <= 2 then
-			return
-		end
-
-		IsReconfiguring = true
-		numWorkers -= 1
-		setupCaster()
-		print("numWorkers: ", numWorkers)
-		task.wait(0.05)
-		IsReconfiguring = false
-
-	elseif msg == "h" then
-		print("=== FastCast2 Server Benchmark Keys ===")
-		print("Type in chat to control the benchmark:")
-		print("p - Start benchmark")
-		print("l - Increase projectile amount by 500")
-		print("k - Decrease projectile amount by 500")
-		print("u - Toggle Instanced/Instanceless")
-		print("j - Toggle BulkMoveTo/Motor6D")
-		print("y - Toggle ObjectCache")
-		print("v - Toggle VisualizeCasts")
-		print("x - Cycle HighFidelityBehavior")
-		print("> - Increase HighFidelitySegmentSize")
-		print("< - Decrease HighFidelitySegmentSize")
-		print("] - Increment numWorkers")
-		print("[ - Decrement numWorkers")
-		print("i - Show benchmark info")
-		print("h - Show this help")
-
-	elseif msg == "i" then
-		printBenchmarkInfo()
+	if handler then
+		handler()
 	end
 end
 
-Players.PlayerAdded:Connect(function(player)
+local function connectPlayer(player)
 	player.Chatted:Connect(function(message)
 		onChatMessage(player, message)
 	end)
-end)
+end
 
--- Initial setup
-setupCaster()
+Players.PlayerAdded:Connect(connectPlayer)
 
-print("=== FastCast2 Server Benchmark Keys ===")
-print("Type in chat to control the benchmark:")
-print("p - Start benchmark")
-print("l - Increase projectile amount by 500")
-print("k - Decrease projectile amount by 500")
-print("u - Toggle Instanced/Instanceless")
-print("j - Toggle BulkMoveTo/Motor6D")
-print("y - Toggle ObjectCache")
-print("v - Toggle VisualizeCasts")
-print("x - Cycle HighFidelityBehavior")
-print("> - Increase HighFidelitySegmentSize")
-print("< - Decrease HighFidelitySegmentSize")
-print("] - Increment numWorkers")
-print("[ - Decrement numWorkers")
-print("i - Show benchmark info")
-print("h - Show this help")
+for _, player in Players:GetPlayers() do
+	connectPlayer(player)
+end
 
+--// Initialization
+
+rebuildCaster()
+
+showHelp()
 printBenchmarkInfo()

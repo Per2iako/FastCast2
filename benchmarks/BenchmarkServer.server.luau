@@ -59,7 +59,7 @@ local Config = {
 }
 
 --// Constants
-local NUM_WORKERS_CHANGE_COOLDOWN = 2.5
+local NUM_WORKERS_CHANGE_COOLDOWN = 4.5
 local BENCHMARK_COOLDOWN = 2.5
 
 --// Modules

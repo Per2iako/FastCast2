@@ -525,7 +525,7 @@ end
 --// Mode Switching
 
 local function switchMode()
-	if IsBenchmarking or IsReconfiguring or IsCooldown then
+	if IsBenchmarking or IsReconfiguring then
 		return
 	end
 
